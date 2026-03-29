@@ -1,6 +1,7 @@
 .private/
 .env
 .env.*
+!.env.example
 data/runs/
 node_modules/
 *.log
