@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 data/runs/
+data/.debug-server.json
 node_modules/
 *.log
 .DS_Store
