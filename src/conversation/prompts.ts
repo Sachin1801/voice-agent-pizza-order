@@ -30,14 +30,20 @@ export function buildSystemPrompt(order: OrderRequest): string {
 - Skip drink if over budget: ${order.drink.skip_if_over_budget}
 
 ## Behavior
-- Respond to what the employee says naturally, but keep responses short
+- Your first response should be a simple delivery order request like "Hi, I'd like to place a delivery order please." Do NOT give your name, phone, address, or order details until the employee asks. If the employee immediately asks a specific question (like "name for the order?"), answer that question directly instead of the greeting.
+- NEVER mention your budget to the employee under any circumstances.
+- NEVER argue about prices, totals, or math with the employee. Accept the numbers they give you — they have the register, you don't. If the total sounds different from what you expected, just accept it.
+- When a topping is in your acceptable substitutions list, you MUST accept it immediately. These are pre-approved by the customer. Do not reject acceptable substitutions.
+- When the employee acknowledges with "okay", "got it", "sure", "alright", etc., do NOT repeat what you just said. Simply wait for their next question or instruction.
+- Keep responses SHORT — 1-2 sentences max. Don't repeat back every detail the employee said. Just acknowledge and move on to the next thing.
+- Vary your phrasing naturally. Don't repeat the same phrase (like "Can I get the price for that?") every time. Sound like a real person on a phone call.
 - When the employee pauses (typing), wait — don't fill the silence
 - If asked to repeat info, repeat it clearly
 - If prices are vague ("about thirty bucks"), ask for the exact amount
 - If delivery time is vague ("35-40 minutes"), ask for a specific estimate
 - Always get the individual price for each item
 - Get the total, delivery time, and order/confirmation number
-- Deliver the special instructions before ending the call
+- Deliver the special instructions before ending the call. Say ONLY the exact special instruction text — do NOT add your own reasons, explanations, or embellishments to it
 - If the employee suspects you're a bot, end the call immediately
 
 ## Response Format
@@ -45,7 +51,7 @@ You MUST respond with a JSON object containing one action. Available actions:
 
 - {"action": "say", "text": "..."} — say something to the employee
   Optional data fields you MUST include on "say" when the employee mentions them:
-  - "heard_price": {"item": "pizza", "price": 18.50} — when employee states a price for an item
+  - "heard_price": {"item": "pizza|side|drink", "price": 18.50} — when employee states a price for ANY item. Use "pizza" for the pizza, "side" for the side dish (garlic bread, wings, breadsticks, etc.), "drink" for the drink. You MUST attach this for EVERY item price the employee tells you, not just pizza.
   - "heard_total": 28.98 — when employee states the total
   - "heard_delivery_time": "35 minutes" — when employee states delivery time
   - "heard_order_number": "4412" — when employee states the order/confirmation number
@@ -66,28 +72,49 @@ export function buildConversationContext(
     pizzaConfirmed: boolean;
     pizzaPrice: number | null;
     sideConfirmed: boolean;
+    sideSkipped: boolean;
     sideDescription: string | null;
     sidePrice: number | null;
+    sideAttemptIndex: number;
     drinkConfirmed: boolean;
+    drinkSkipped: boolean;
     drinkDescription: string | null;
     drinkPrice: number | null;
     runningTotal: number;
+    heardTotal: number | null;
     substitutions: Record<string, string>;
     deliveryTime: string | null;
     orderNumber: string | null;
     specialInstructionsDelivered: boolean;
-  }
+  },
+  nextSideOption?: string | null
 ): string {
   const history = conversationHistory
     .slice(-20) // Keep last 20 turns for context
     .map((turn) => `${turn.role === 'employee' ? 'Employee' : 'You'}: ${turn.text}`)
     .join('\n');
 
+  let sideStatus = `Side confirmed: ${orderState.sideConfirmed}`;
+  if (orderState.sideSkipped) {
+    sideStatus = 'Side: SKIPPED (all options unavailable)';
+  } else if (orderState.sideConfirmed) {
+    sideStatus += ` ${orderState.sideDescription ? `(${orderState.sideDescription})` : ''} ${orderState.sidePrice !== null ? `($${orderState.sidePrice})` : ''}`;
+  } else if (nextSideOption) {
+    sideStatus += ` — NEXT BACKUP TO TRY: ${nextSideOption}`;
+  }
+
+  let drinkStatus = `Drink confirmed: ${orderState.drinkConfirmed}`;
+  if (orderState.drinkSkipped) {
+    drinkStatus = 'Drink: SKIPPED (over budget)';
+  } else if (orderState.drinkConfirmed) {
+    drinkStatus += ` ${orderState.drinkDescription ? `(${orderState.drinkDescription})` : ''} ${orderState.drinkPrice !== null ? `($${orderState.drinkPrice})` : ''}`;
+  }
+
   return `## Current Order State
 - Pizza confirmed: ${orderState.pizzaConfirmed} ${orderState.pizzaPrice !== null ? `($${orderState.pizzaPrice})` : ''}
-- Side confirmed: ${orderState.sideConfirmed} ${orderState.sideDescription ? `(${orderState.sideDescription})` : ''} ${orderState.sidePrice !== null ? `($${orderState.sidePrice})` : ''}
-- Drink confirmed: ${orderState.drinkConfirmed} ${orderState.drinkDescription ? `(${orderState.drinkDescription})` : ''} ${orderState.drinkPrice !== null ? `($${orderState.drinkPrice})` : ''}
-- Running total: $${orderState.runningTotal}
+- ${sideStatus}
+- ${drinkStatus}
+- Running total: $${orderState.runningTotal}${orderState.heardTotal !== null ? ` (employee stated total: $${orderState.heardTotal})` : ''}
 - Substitutions made: ${Object.entries(orderState.substitutions).map(([k, v]) => `${k} → ${v}`).join(', ') || 'none'}
 - Delivery time: ${orderState.deliveryTime ?? 'not yet'}
 - Order number: ${orderState.orderNumber ?? 'not yet'}
@@ -100,4 +127,4 @@ Respond with your next action as a JSON object.`;
 }
 
 /** Prompt version identifier for logging */
-export const PROMPT_VERSION = 'v1.0.0';
+export const PROMPT_VERSION = 'v1.2.0';

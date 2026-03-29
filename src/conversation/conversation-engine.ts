@@ -80,7 +80,8 @@ export class ConversationEngine {
 
     // Build messages for Groq
     const systemPrompt = buildSystemPrompt(this.order);
-    const contextPrompt = buildConversationContext(this.conversationHistory, this.orderState);
+    const nextSideOption = this.getNextSideOption();
+    const contextPrompt = buildConversationContext(this.conversationHistory, this.orderState, nextSideOption);
 
     this.logger.emit({
       event: 'groq.request_sending',
@@ -286,6 +287,10 @@ export class ConversationEngine {
 
   /** Manually update order state (called from outside when we parse prices from transcript) */
   updatePizzaPrice(price: number): void {
+    if (this.orderState.pizzaPrice !== null) {
+      this.logger.debug('conversation.pizza_price_duplicate', `Pizza price already set ($${this.orderState.pizzaPrice}), ignoring duplicate`);
+      return;
+    }
     this.orderState.pizzaConfirmed = true;
     this.orderState.pizzaPrice = price;
     this.orderState.runningTotal += price;
@@ -296,6 +301,10 @@ export class ConversationEngine {
   }
 
   updateSide(description: string, price: number): void {
+    if (this.orderState.sidePrice !== null) {
+      this.logger.debug('conversation.side_price_duplicate', `Side price already set ($${this.orderState.sidePrice}), ignoring duplicate`);
+      return;
+    }
     this.orderState.sideConfirmed = true;
     this.orderState.sideDescription = description;
     this.orderState.sidePrice = price;
@@ -308,6 +317,10 @@ export class ConversationEngine {
   }
 
   updateDrink(description: string, price: number): void {
+    if (this.orderState.drinkPrice !== null) {
+      this.logger.debug('conversation.drink_price_duplicate', `Drink price already set ($${this.orderState.drinkPrice}), ignoring duplicate`);
+      return;
+    }
     if (this.ruleEngine.shouldSkipDrink(this.orderState, price)) {
       this.orderState.drinkSkipped = true;
       this.logger.info('conversation.drink_skipped', `Drink skipped — would exceed budget ($${this.orderState.runningTotal} + $${price} > $${this.order.budget_max})`, {
@@ -325,6 +338,18 @@ export class ConversationEngine {
     this.logger.info('conversation.drink_set', `Drink: ${description} $${price}`, {
       description,
       price,
+      running_total: this.orderState.runningTotal,
+    });
+  }
+
+  /** Track the employee-stated total for cross-checking against running total */
+  updateHeardTotal(total: number): void {
+    if (this.orderState.heardTotal !== null) {
+      this.logger.debug('conversation.heard_total_duplicate', `Heard total already set ($${this.orderState.heardTotal}), updating`);
+    }
+    this.orderState.heardTotal = total;
+    this.logger.info('conversation.heard_total_set', `Heard total: $${total} (running total: $${this.orderState.runningTotal})`, {
+      heard_total: total,
       running_total: this.orderState.runningTotal,
     });
   }
@@ -347,5 +372,27 @@ export class ConversationEngine {
   skipSide(): void {
     this.orderState.sideSkipped = true;
     this.logger.info('conversation.side_skipped', 'Side skipped per order rules');
+  }
+
+  /** Advance to the next side backup option. Returns the next option or null if exhausted. */
+  advanceSideOption(): string | null {
+    const next = this.ruleEngine.getNextSideOption(this.orderState);
+    if (next) {
+      this.orderState.sideAttemptIndex++;
+      this.logger.info('conversation.side_backup_advanced', `Advancing to side backup option: ${next}`, {
+        option: next,
+        attempt_index: this.orderState.sideAttemptIndex,
+      });
+    } else {
+      // All options exhausted — skip side per order rules
+      this.skipSide();
+      this.logger.info('conversation.side_all_exhausted', 'All side backup options exhausted — skipping side');
+    }
+    return next;
+  }
+
+  /** Get the current next side option to suggest (without advancing) */
+  getNextSideOption(): string | null {
+    return this.ruleEngine.getNextSideOption(this.orderState);
   }
 }

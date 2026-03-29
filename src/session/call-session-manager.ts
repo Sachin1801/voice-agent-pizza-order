@@ -55,6 +55,17 @@ export class CallSessionManager {
   private _mediaMessageCount = 0;
   private _firstMessageLogged = false;
 
+  // Debounce: accumulate final transcripts before calling Groq
+  private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private _pendingTranscripts: string[] = [];
+  private _isGenerating = false;
+  private static readonly DEBOUNCE_MS = 3500;
+  private static readonly SPEECH_FINAL_DEBOUNCE_MS = 1500;
+
+  // Post-confirm auto-hangup
+  private _confirmDoneTimeout: ReturnType<typeof setTimeout> | null = null;
+  private static readonly CONFIRM_DONE_TIMEOUT_MS = 10_000;
+
   constructor(serverLogger: Logger) {
     this.serverLogger = serverLogger;
     this.twilioClient = twilio(config.twilioAccountSid, config.twilioAuthToken);
@@ -275,6 +286,11 @@ export class CallSessionManager {
       this.routeTranscript(session, transcript);
     });
 
+    // Wire speech_final as a timer-shortening signal, not an immediate flush
+    session.audioBridge.onSpeechFinal(() => {
+      this.handleSpeechFinal(session);
+    });
+
     // Connect to Deepgram and Cartesia
     try {
       await session.audioBridge.connect();
@@ -303,6 +319,11 @@ export class CallSessionManager {
     // Re-wire transcript events to the existing phase router
     session.audioBridge.on('transcript', (transcript: TranscriptEvent) => {
       this.routeTranscript(session, transcript);
+    });
+
+    // Re-wire speech_final as a timer-shortening signal
+    session.audioBridge.onSpeechFinal(() => {
+      this.handleSpeechFinal(session);
     });
 
     try {
@@ -412,6 +433,8 @@ export class CallSessionManager {
       });
 
       session.phase = 'conversation';
+      // Enable barge-in now that we're in conversation with a human
+      session.audioBridge?.setBargeinEnabled(true);
       session.conversationEngine = new ConversationEngine(
         session.order,
         session.logger,
@@ -430,9 +453,29 @@ export class CallSessionManager {
     }
   }
 
-  /** Handle transcript during CONVERSATION phase */
+  /** Handle transcript during CONVERSATION phase (with debounce) */
   private handleConversationTranscript(session: CallSession, transcript: TranscriptEvent): void {
+    // Cancel confirm-done timeout on ANY inbound speech during conversation —
+    // the employee is still talking, so we shouldn't auto-hangup
+    if (this._confirmDoneTimeout && transcript.text.trim().length > 0) {
+      clearTimeout(this._confirmDoneTimeout);
+      this._confirmDoneTimeout = null;
+      session.logger.info('session.confirm_timeout_cancelled', 'Confirm-done timeout cancelled — employee still speaking');
+    }
+
     if (!session.conversationEngine || !transcript.isFinal) return;
+
+    // Check for bot detection in transcript before other processing
+    if (this.detectBotAccusation(transcript.text)) {
+      session.logger.warn('session.bot_detected', 'Bot accusation detected in transcript — forcing immediate hangup', {
+        text: transcript.text,
+      });
+      session.audioBridge?.speak("I'm sorry, I have to go. Goodbye.");
+      setTimeout(() => {
+        this.endCall(session, 'detected_as_bot', 'Bot accusation detected in transcript');
+      }, 2000);
+      return;
+    }
 
     // Don't process transcripts while the agent is speaking
     if (session.audioBridge?.getIsSpeaking()) {
@@ -442,7 +485,75 @@ export class CallSessionManager {
       return;
     }
 
-    session.conversationEngine.addEmployeeSpeech(transcript.text);
+    // Accumulate final transcripts and debounce — wait for the employee to finish
+    this._pendingTranscripts.push(transcript.text);
+
+    // Reset debounce timer
+    if (this._debounceTimer) {
+      clearTimeout(this._debounceTimer);
+    }
+
+    this._debounceTimer = setTimeout(() => {
+      this.flushDebouncedTranscripts(session);
+    }, CallSessionManager.DEBOUNCE_MS);
+  }
+
+  /** Handle speech_final as a confidence hint — shorten debounce instead of immediate flush */
+  private handleSpeechFinal(session: CallSession): void {
+    if (session.phase !== 'conversation') return;
+    if (this._pendingTranscripts.length === 0) return;
+
+    // Clear existing debounce and start a shorter one
+    if (this._debounceTimer) {
+      clearTimeout(this._debounceTimer);
+    }
+
+    this._debounceTimer = setTimeout(() => {
+      this.flushDebouncedTranscripts(session);
+    }, CallSessionManager.SPEECH_FINAL_DEBOUNCE_MS);
+  }
+
+  // Bot accusation patterns — similar approach to hold-detector.ts
+  // IMPORTANT: These must be specific enough to avoid false positives on normal
+  // questions like "What are you trying to order?" (see call 102fbe96)
+  private static readonly BOT_ACCUSATION_PATTERNS = [
+    /are\s+you\s+a\s+(robot|bot|computer|machine|ai)\b/i,
+    /is\s+this\s+a\s+(robot|bot|computer|machine|ai)\b/i,
+    /talking\s+to\s+a\s+(robot|bot|computer|machine)\b/i,
+    /you('re|\s+are)\s+(a\s+)?(robot|bot|computer|ai)\b/i,
+    /sounds?\s+like\s+a\s+(robot|bot|computer)\b/i,
+    /can('t|not)\s+understand\s+(you\b|what\s+you('re|\s+are)\s+saying)/i,
+    /not\s+a\s+real\s+person/i,
+  ];
+
+  /** Detect if the employee is accusing the agent of being a bot */
+  private detectBotAccusation(text: string): boolean {
+    return CallSessionManager.BOT_ACCUSATION_PATTERNS.some((p) => p.test(text));
+  }
+
+  /** Flush accumulated transcripts and trigger Groq (called by debounce timer or speech_final) */
+  private flushDebouncedTranscripts(session: CallSession): void {
+    if (this._debounceTimer) {
+      clearTimeout(this._debounceTimer);
+      this._debounceTimer = null;
+    }
+
+    if (this._pendingTranscripts.length === 0 || !session.conversationEngine || session.phase !== 'conversation') return;
+
+    // Don't fire while another Groq request is in-flight
+    if (this._isGenerating) {
+      session.logger.debug('session.debounce_skipped', 'Groq request already in-flight, skipping');
+      return;
+    }
+
+    const combinedText = this._pendingTranscripts.join(' ');
+    this._pendingTranscripts = [];
+
+    session.logger.info('session.debounce_flushed', `Flushed ${combinedText.split(' ').length} words to Groq`, {
+      text: combinedText,
+    });
+
+    session.conversationEngine.addEmployeeSpeech(combinedText);
     this.generateAndSpeak(session);
   }
 
@@ -450,6 +561,13 @@ export class CallSessionManager {
   private async generateAndSpeak(session: CallSession): Promise<void> {
     if (!session.conversationEngine || !session.audioBridge) return;
 
+    // In-flight guard: prevent concurrent Groq requests
+    if (this._isGenerating) {
+      session.logger.debug('session.generate_skipped', 'Already generating — skipping');
+      return;
+    }
+
+    this._isGenerating = true;
     try {
       const response = await session.conversationEngine.generateResponse();
       if (!response) {
@@ -463,13 +581,17 @@ export class CallSessionManager {
       if (action.action === 'say') {
         if (action.heard_price) {
           const { item, price } = action.heard_price;
-          if (item.toLowerCase().includes('pizza')) {
+          const itemLower = item.toLowerCase();
+          if (itemLower === 'pizza' || itemLower.includes('pizza')) {
             session.conversationEngine.updatePizzaPrice(price);
-          } else if (item.toLowerCase().includes('side') || item.toLowerCase().includes('bread') || item.toLowerCase().includes('wing') || item.toLowerCase().includes('stick')) {
+          } else if (itemLower === 'side' || itemLower.includes('bread') || itemLower.includes('wing') || itemLower.includes('stick') || itemLower.includes('side')) {
             session.conversationEngine.updateSide(item, price);
-          } else if (item.toLowerCase().includes('drink') || item.toLowerCase().includes('coke') || item.toLowerCase().includes('pepsi') || item.toLowerCase().includes('sprite')) {
+          } else if (itemLower === 'drink' || itemLower.includes('coke') || itemLower.includes('pepsi') || itemLower.includes('sprite') || itemLower.includes('drink')) {
             session.conversationEngine.updateDrink(item, price);
           }
+        }
+        if (action.heard_total != null) {
+          session.conversationEngine.updateHeardTotal(action.heard_total);
         }
         if (action.heard_delivery_time) {
           session.conversationEngine.updateDeliveryTime(action.heard_delivery_time);
@@ -482,12 +604,47 @@ export class CallSessionManager {
         }
       }
 
-      // Check if this is a hangup action
+      // Proactive over-budget check: after extracting prices, check if pizza+side already exceed budget
+      const currentState = session.conversationEngine.getOrderState();
+      if (
+        currentState.pizzaConfirmed &&
+        (currentState.sideConfirmed || currentState.sideSkipped) &&
+        !currentState.drinkConfirmed &&
+        !currentState.drinkSkipped &&
+        currentState.runningTotal > session.order.budget_max
+      ) {
+        session.logger.warn('session.over_budget_detected', `Running total $${currentState.runningTotal} exceeds budget $${session.order.budget_max} — forcing over_budget hangup`, {
+          running_total: currentState.runningTotal,
+          budget_max: session.order.budget_max,
+        });
+        session.audioBridge!.speak("I'm sorry, that's actually going to be over my budget. I'll have to cancel the order. Thank you for your help.");
+        setTimeout(() => {
+          this.endCall(session, 'over_budget', `Running total $${currentState.runningTotal} exceeds budget $${session.order.budget_max}`);
+        }, 3000);
+        return;
+      }
+
+      // Check if this is a hangup action — cancel confirm timeout if we're hanging up properly
       if (action.action === 'hangup_with_outcome') {
+        if (this._confirmDoneTimeout) {
+          clearTimeout(this._confirmDoneTimeout);
+          this._confirmDoneTimeout = null;
+        }
         session.audioBridge.speak(response.textToSpeak);
         setTimeout(() => {
           this.endCall(session, action.outcome, action.reason);
         }, 3000);
+        return;
+      }
+
+      // Post-confirm auto-hangup: if agent just confirmed the order is done,
+      // start a timeout to auto-hangup if no hangup_with_outcome follows
+      if (action.action === 'confirm_done') {
+        session.audioBridge.speak(response.textToSpeak);
+        this._confirmDoneTimeout = setTimeout(() => {
+          session.logger.info('session.confirm_done_timeout', 'Auto-hangup after confirm_done — no hangup_with_outcome received');
+          this.endCall(session, 'completed', 'Auto-hangup after confirm_done timeout');
+        }, CallSessionManager.CONFIRM_DONE_TIMEOUT_MS);
         return;
       }
 
@@ -496,6 +653,8 @@ export class CallSessionManager {
 
     } catch (err) {
       session.logger.error('session.generate_failed', `Failed to generate response: ${err instanceof Error ? err.message : 'Unknown'}`);
+    } finally {
+      this._isGenerating = false;
     }
   }
 
@@ -518,6 +677,7 @@ export class CallSessionManager {
         pizza: null,
         side: null,
         drink: null,
+        drink_skip_reason: null,
         total: null,
         delivery_time: null,
         order_number: null,
@@ -609,9 +769,24 @@ export class CallSessionManager {
     });
 
     if (status === 'completed' || status === 'failed' || status === 'busy' || status === 'no-answer') {
+      // Cancel any pending confirm timeout
+      if (this._confirmDoneTimeout) {
+        clearTimeout(this._confirmDoneTimeout);
+        this._confirmDoneTimeout = null;
+      }
+
       // Route ALL terminal states through endCall() so artifacts are always written
       if (session.phase !== 'completed') {
-        this.endCall(session, 'nothing_available', `Twilio status: ${status}`);
+        // Infer outcome from order state instead of defaulting to nothing_available
+        let inferredOutcome: CallOutcome = 'nothing_available';
+        if (status === 'completed' && session.conversationEngine) {
+          const state = session.conversationEngine.getOrderState();
+          if (state.pizzaConfirmed && state.specialInstructionsDelivered) {
+            inferredOutcome = 'completed';
+            session.logger.info('session.outcome_inferred', 'Inferred completed outcome from order state (pizza confirmed + instructions delivered)');
+          }
+        }
+        this.endCall(session, inferredOutcome, `Twilio status: ${status}`);
       }
     }
   }

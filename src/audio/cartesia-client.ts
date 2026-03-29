@@ -30,6 +30,7 @@ export class CartesiaClient extends EventEmitter {
   private logger: Logger;
   private ws: WebSocket | null = null;
   private requestCount = 0;
+  private activeContextId: string | null = null;
 
   constructor(parentLogger: Logger) {
     super();
@@ -136,6 +137,7 @@ export class CartesiaClient extends EventEmitter {
       continue: false,
     };
 
+    this.activeContextId = request.context_id;
     this.ws.send(JSON.stringify(request));
   }
 
@@ -172,6 +174,18 @@ export class CartesiaClient extends EventEmitter {
         type: msg.type,
       });
     }
+  }
+
+  /** Cancel in-progress TTS synthesis (for barge-in) */
+  cancel(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.activeContextId) return;
+
+    this.logger.info('cartesia.cancel', `Cancelling TTS context: ${this.activeContextId}`);
+    this.ws.send(JSON.stringify({
+      context_id: this.activeContextId,
+      cancel: true,
+    }));
+    this.activeContextId = null;
   }
 
   /** Close the connection */

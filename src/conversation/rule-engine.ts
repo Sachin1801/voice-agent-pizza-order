@@ -33,6 +33,7 @@ export interface OrderState {
   drinkPrice: number | null;
   runningTotal: number;
   substitutions: Record<string, string>;
+  heardTotal: number | null;
   deliveryTime: string | null;
   orderNumber: string | null;
   specialInstructionsDelivered: boolean;
@@ -53,6 +54,7 @@ export function createInitialOrderState(): OrderState {
     drinkPrice: null,
     runningTotal: 0,
     substitutions: {},
+    heardTotal: null,
     deliveryTime: null,
     orderNumber: null,
     specialInstructionsDelivered: false,
@@ -183,7 +185,7 @@ export class RuleEngine {
     action: Extract<LLMAction, { action: 'hangup_with_outcome' }>,
     state: OrderState
   ): RuleDecision {
-    // For 'completed' outcome, verify we have minimum required info
+    // For 'completed' outcome, verify ALL required info is present
     if (action.outcome === 'completed') {
       if (!state.pizzaConfirmed) {
         this.logger.warn('rule_engine.premature_completion',
@@ -195,6 +197,47 @@ export class RuleEngine {
           allowed: false,
           action: null,
           reason: 'Cannot complete: pizza not confirmed',
+          modification: null,
+        };
+      }
+
+      if (!state.sideConfirmed && !state.sideSkipped) {
+        this.logger.warn('rule_engine.premature_completion',
+          'LLM tried to complete but side not confirmed or skipped', {
+            side_confirmed: state.sideConfirmed,
+            side_skipped: state.sideSkipped,
+            decision: 'rejected',
+          });
+        return {
+          allowed: false,
+          action: null,
+          reason: 'Cannot complete: side not confirmed or skipped',
+          modification: null,
+        };
+      }
+
+      if (state.deliveryTime === null) {
+        this.logger.warn('rule_engine.missing_delivery_time',
+          'LLM tried to complete but delivery time not collected', {
+            decision: 'rejected',
+          });
+        return {
+          allowed: false,
+          action: null,
+          reason: 'Cannot complete: delivery time not collected',
+          modification: null,
+        };
+      }
+
+      if (state.orderNumber === null) {
+        this.logger.warn('rule_engine.missing_order_number',
+          'LLM tried to complete but order number not collected', {
+            decision: 'rejected',
+          });
+        return {
+          allowed: false,
+          action: null,
+          reason: 'Cannot complete: order number not collected',
           modification: null,
         };
       }
