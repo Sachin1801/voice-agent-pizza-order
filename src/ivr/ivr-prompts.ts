@@ -39,6 +39,25 @@ function extractZipCode(address: string): string {
 }
 
 /**
+ * Number word to digit mapping.
+ * Deepgram may transcribe "3" or "three" — we need to handle both.
+ */
+const WORD_TO_DIGIT: Record<string, string> = {
+  zero: '0', one: '1', two: '2', three: '3', four: '4',
+  five: '5', six: '6', seven: '7', eight: '8', nine: '9',
+};
+
+/** Regex fragment matching a digit as either a character or a word */
+const DIGIT_PATTERN = '(?:\\d|one|two|three|four|five|six|seven|eight|nine|zero)';
+
+/** Extract a digit from a matched string (handles both "3" and "three") */
+function extractDigit(s: string): string {
+  const trimmed = s.trim().toLowerCase();
+  if (/^\d$/.test(trimmed)) return trimmed;
+  return WORD_TO_DIGIT[trimmed] ?? '1';
+}
+
+/**
  * IVR prompt definitions in order.
  * The state machine walks through these sequentially.
  */
@@ -46,23 +65,25 @@ export const IVR_PROMPTS: IVRPromptConfig[] = [
   {
     state: 'WELCOME',
     promptPatterns: [
-      // Only match when we hear the actual delivery option with its key number.
-      // The key might be any digit (1, 2, 8, etc.) — we capture it dynamically.
-      // Do NOT match on "thank you for calling" alone — that's just the greeting.
-      /press\s*(\d)\s*(for)?\s*delivery/i,
-      /delivery.{0,20}press\s*(\d)/i,
-      /for\s*delivery\s*press\s*(\d)/i,
+      // Match "delivery" with a press key — handles both digit chars and words.
+      // e.g., "Press 1 for delivery", "Press one for delivery",
+      //        "For delivery, press three", "delivery press 8"
+      new RegExp(`press\\s*(${DIGIT_PATTERN})\\s*(for)?\\s*delivery`, 'i'),
+      new RegExp(`delivery.{0,20}press\\s*(${DIGIT_PATTERN})`, 'i'),
+      new RegExp(`for\\s*delivery\\s*,?\\s*press\\s*(${DIGIT_PATTERN})`, 'i'),
     ],
     responseType: 'dtmf',
     getResponse: (_order, transcript?: string) => {
-      // Extract the actual digit from the transcript
       if (transcript) {
-        const match = transcript.match(/press\s*(\d)\s*(for)?\s*delivery/i)
-          ?? transcript.match(/delivery.{0,20}press\s*(\d)/i)
-          ?? transcript.match(/for\s*delivery\s*press\s*(\d)/i);
-        if (match?.[1]) return match[1];
+        const digitRe = new RegExp(`press\\s*(${DIGIT_PATTERN})\\s*(for)?\\s*delivery`, 'i');
+        const deliveryFirstRe = new RegExp(`delivery.{0,20}press\\s*(${DIGIT_PATTERN})`, 'i');
+        const forDeliveryRe = new RegExp(`for\\s*delivery\\s*,?\\s*press\\s*(${DIGIT_PATTERN})`, 'i');
+        const match = transcript.match(digitRe)
+          ?? transcript.match(deliveryFirstRe)
+          ?? transcript.match(forDeliveryRe);
+        if (match?.[1]) return extractDigit(match[1]);
       }
-      return '1'; // fallback
+      return '1';
     },
     nextState: 'NAME',
     maxRetries: 3,
