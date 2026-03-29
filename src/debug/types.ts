@@ -75,6 +75,7 @@ export interface StateSnapshot {
   drink_description: string | null;
   drink_price: number | null;
   running_total: number;
+  heard_total: number | null;
   substitutions: Record<string, string>;
   delivery_time: string | null;
   order_number: string | null;
@@ -233,6 +234,7 @@ export function toStateSnapshot(state: OrderState): StateSnapshot {
     drink_description: state.drinkDescription,
     drink_price: state.drinkPrice,
     running_total: state.runningTotal,
+    heard_total: state.heardTotal,
     substitutions: { ...state.substitutions },
     delivery_time: state.deliveryTime,
     order_number: state.orderNumber,

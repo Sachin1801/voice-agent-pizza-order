@@ -108,8 +108,9 @@ export class DebugConversationEngine {
       : '';
     const fullSystemPrompt = baseSystemPrompt + rulesBlock + overrideBlock;
 
-    // Build conversation context
-    const contextPrompt = buildConversationContext(this.conversationHistory, this.orderState);
+    // Build conversation context (with next side option for backup tracking)
+    const nextSideOption = this.ruleEngine.getNextSideOption(this.orderState);
+    const contextPrompt = buildConversationContext(this.conversationHistory, this.orderState, nextSideOption);
 
     this.logger.info('debug.groq_request', `Sending request #${this.requestCount} to Groq`, {
       request_number: this.requestCount,
@@ -359,24 +360,31 @@ export class DebugConversationEngine {
         // Capture prices/totals from the action metadata
         if (action.heard_price) {
           const { item, price } = action.heard_price;
-          if (item.toLowerCase().includes('pizza') || (!this.orderState.pizzaConfirmed && !item.toLowerCase().includes('bread') && !item.toLowerCase().includes('wing') && !item.toLowerCase().includes('stick') && !item.toLowerCase().includes('coke') && !item.toLowerCase().includes('pepsi') && !item.toLowerCase().includes('sprite'))) {
-            this.orderState.pizzaConfirmed = true;
-            this.orderState.pizzaPrice = price;
-            this.orderState.runningTotal += price;
-          } else if (!this.orderState.sideConfirmed && !this.orderState.sideSkipped) {
-            this.orderState.sideConfirmed = true;
-            this.orderState.sideDescription = item;
-            this.orderState.sidePrice = price;
-            this.orderState.runningTotal += price;
-          } else if (!this.orderState.drinkConfirmed && !this.orderState.drinkSkipped) {
-            this.orderState.drinkConfirmed = true;
-            this.orderState.drinkDescription = item;
-            this.orderState.drinkPrice = price;
-            this.orderState.runningTotal += price;
+          const itemLower = item.toLowerCase();
+          if (itemLower === 'pizza' || itemLower.includes('pizza')) {
+            if (this.orderState.pizzaPrice === null) {
+              this.orderState.pizzaConfirmed = true;
+              this.orderState.pizzaPrice = price;
+              this.orderState.runningTotal += price;
+            }
+          } else if (itemLower === 'side' || itemLower.includes('wing') || itemLower.includes('bread') || itemLower.includes('stick')) {
+            if (this.orderState.sidePrice === null) {
+              this.orderState.sideConfirmed = true;
+              this.orderState.sideDescription = item;
+              this.orderState.sidePrice = price;
+              this.orderState.runningTotal += price;
+            }
+          } else if (itemLower === 'drink' || itemLower.includes('coke') || itemLower.includes('pepsi') || itemLower.includes('sprite')) {
+            if (this.orderState.drinkPrice === null) {
+              this.orderState.drinkConfirmed = true;
+              this.orderState.drinkDescription = item;
+              this.orderState.drinkPrice = price;
+              this.orderState.runningTotal += price;
+            }
           }
         }
         if (action.heard_total) {
-          // Store total but don't override running calculations
+          this.orderState.heardTotal = action.heard_total;
         }
         if (action.heard_delivery_time) {
           this.orderState.deliveryTime = action.heard_delivery_time;
