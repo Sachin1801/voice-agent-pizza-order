@@ -267,7 +267,7 @@ describe('CallSessionManager', () => {
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
     });
 
-    it('speech_final reschedules to 1500ms instead of 3500ms', () => {
+    it('speech_final reschedules to 2000ms instead of 3500ms', () => {
       const session = createFakeSession();
       const mockEngine = {
         addEmployeeSpeech: vi.fn(),
@@ -289,11 +289,11 @@ describe('CallSessionManager', () => {
       // Fire speech_final immediately after
       (manager as any).handleSpeechFinal(session);
 
-      // At 1000ms — not yet
-      vi.advanceTimersByTime(1000);
+      // At 1500ms — not yet (was flushing here before, now waits longer)
+      vi.advanceTimersByTime(1500);
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
 
-      // At 1500ms — should flush
+      // At 2000ms — should flush
       vi.advanceTimersByTime(500);
       expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith('Here is your order number 4412');
     });
@@ -436,7 +436,7 @@ describe('CallSessionManager', () => {
       expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledTimes(1);
     });
 
-    it('ignores partial transcripts during conversation', () => {
+    it('ignores partial transcripts when no debounce is active', () => {
       const session = createFakeSession();
       session.conversationEngine = { addEmployeeSpeech: vi.fn() } as any;
       session.audioBridge = { getIsSpeaking: () => false } as any;
@@ -552,6 +552,216 @@ describe('CallSessionManager', () => {
 
       vi.advanceTimersByTime(5000);
       expect(endCallSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── Filler Word Detection ──────────────────────────────────────────────
+
+  describe('filler word detection', () => {
+    it('filler word "Okay." keeps full debounce, not speech_final shortened', () => {
+      const session = createFakeSession();
+      const mockEngine = {
+        addEmployeeSpeech: vi.fn(),
+        generateResponse: vi.fn().mockResolvedValue(null),
+        getOrderState: vi.fn().mockReturnValue(createInitialOrderState()),
+      };
+      session.conversationEngine = mockEngine as any;
+      session.audioBridge = { getIsSpeaking: () => false } as any;
+      (manager as any).activeSession = session;
+
+      // Employee says "Okay."
+      (manager as any).handleConversationTranscript(session, {
+        text: 'Okay.',
+        isFinal: true,
+        timestamp: new Date().toISOString(),
+        confidence: 0.95,
+      });
+
+      // speech_final fires — but "Okay." is a filler, so it should NOT shorten
+      (manager as any).handleSpeechFinal(session);
+
+      // At 2000ms (speech_final timer), should NOT have flushed
+      vi.advanceTimersByTime(2000);
+      expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
+
+      // At 3500ms (full timer), should flush
+      vi.advanceTimersByTime(1500);
+      expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith('Okay.');
+    });
+
+    it('filler word "Got it" keeps full debounce', () => {
+      const session = createFakeSession();
+      const mockEngine = {
+        addEmployeeSpeech: vi.fn(),
+        generateResponse: vi.fn().mockResolvedValue(null),
+        getOrderState: vi.fn().mockReturnValue(createInitialOrderState()),
+      };
+      session.conversationEngine = mockEngine as any;
+      session.audioBridge = { getIsSpeaking: () => false } as any;
+      (manager as any).activeSession = session;
+
+      (manager as any).handleConversationTranscript(session, {
+        text: 'Got it',
+        isFinal: true,
+        timestamp: new Date().toISOString(),
+        confidence: 0.95,
+      });
+
+      (manager as any).handleSpeechFinal(session);
+
+      // Should NOT flush at shortened timer
+      vi.advanceTimersByTime(2000);
+      expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
+
+      // Should flush at full timer
+      vi.advanceTimersByTime(1500);
+      expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith('Got it');
+    });
+
+    it('non-filler text gets shortened debounce on speech_final', () => {
+      const session = createFakeSession();
+      const mockEngine = {
+        addEmployeeSpeech: vi.fn(),
+        generateResponse: vi.fn().mockResolvedValue(null),
+        getOrderState: vi.fn().mockReturnValue(createInitialOrderState()),
+      };
+      session.conversationEngine = mockEngine as any;
+      session.audioBridge = { getIsSpeaking: () => false } as any;
+      (manager as any).activeSession = session;
+
+      (manager as any).handleConversationTranscript(session, {
+        text: 'The total is twenty nine dollars',
+        isFinal: true,
+        timestamp: new Date().toISOString(),
+        confidence: 0.95,
+      });
+
+      (manager as any).handleSpeechFinal(session);
+
+      // Should flush at 2000ms (shortened)
+      vi.advanceTimersByTime(2000);
+      expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith('The total is twenty nine dollars');
+    });
+
+    it('recognizes various filler words', () => {
+      const fillers = ['Okay', 'ok', 'Got it', 'Cool', 'Right', 'Alright', 'Sure', 'Yeah', 'Yep', 'Great', 'Perfect', 'Mm-hmm', 'Uh-huh'];
+      const pattern = (CallSessionManager as any).FILLER_PATTERN;
+
+      for (const filler of fillers) {
+        expect(pattern.test(filler)).toBe(true);
+        // Also with trailing period
+        expect(pattern.test(filler + '.')).toBe(true);
+      }
+    });
+
+    it('does NOT treat multi-word sentences as fillers', () => {
+      const pattern = (CallSessionManager as any).FILLER_PATTERN;
+      expect(pattern.test('Okay so the pizza is eighteen fifty')).toBe(false);
+      expect(pattern.test('Got it let me check on that')).toBe(false);
+    });
+  });
+
+  // ─── Partial Transcript Debounce Extension ──────────────────────────────
+
+  describe('partial transcript extends debounce', () => {
+    it('partial transcript during active debounce resets timer to full DEBOUNCE_MS', () => {
+      const session = createFakeSession();
+      const mockEngine = {
+        addEmployeeSpeech: vi.fn(),
+        generateResponse: vi.fn().mockResolvedValue(null),
+        getOrderState: vi.fn().mockReturnValue(createInitialOrderState()),
+      };
+      session.conversationEngine = mockEngine as any;
+      session.audioBridge = { getIsSpeaking: () => false } as any;
+      (manager as any).activeSession = session;
+
+      // Employee says "Okay." (final)
+      (manager as any).handleConversationTranscript(session, {
+        text: 'Okay.',
+        isFinal: true,
+        timestamp: new Date().toISOString(),
+        confidence: 0.95,
+      });
+
+      // 1 second passes, then a partial arrives — employee started talking again
+      vi.advanceTimersByTime(1000);
+      (manager as any).handleConversationTranscript(session, {
+        text: 'So we',
+        isFinal: false,
+        timestamp: new Date().toISOString(),
+        confidence: 0.7,
+      });
+
+      // The debounce should have reset. At 3000ms from the partial (4000ms total), still not flushed
+      vi.advanceTimersByTime(3000);
+      expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
+
+      // At 3500ms from the partial, should flush
+      vi.advanceTimersByTime(500);
+      expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith('Okay.');
+    });
+
+    it('partial transcript without active debounce does nothing', () => {
+      const session = createFakeSession();
+      session.conversationEngine = { addEmployeeSpeech: vi.fn() } as any;
+      session.audioBridge = { getIsSpeaking: () => false } as any;
+      (manager as any).activeSession = session;
+
+      // No pending transcripts, no debounce timer
+      (manager as any).handleConversationTranscript(session, {
+        text: 'some partial',
+        isFinal: false,
+        timestamp: new Date().toISOString(),
+        confidence: 0.7,
+      });
+
+      expect((manager as any)._debounceTimer).toBeNull();
+      expect((manager as any)._pendingTranscripts).toHaveLength(0);
+    });
+
+    it('multi-sentence employee turn accumulated correctly with partial extension', () => {
+      const session = createFakeSession();
+      const mockEngine = {
+        addEmployeeSpeech: vi.fn(),
+        generateResponse: vi.fn().mockResolvedValue(null),
+        getOrderState: vi.fn().mockReturnValue(createInitialOrderState()),
+      };
+      session.conversationEngine = mockEngine as any;
+      session.audioBridge = { getIsSpeaking: () => false } as any;
+      (manager as any).activeSession = session;
+
+      // First sentence final
+      (manager as any).handleConversationTranscript(session, {
+        text: 'So we are actually out of mushrooms.',
+        isFinal: true,
+        timestamp: new Date().toISOString(),
+        confidence: 0.95,
+      });
+
+      // 1s pause, partial arrives (employee continuing)
+      vi.advanceTimersByTime(1000);
+      (manager as any).handleConversationTranscript(session, {
+        text: 'Would you',
+        isFinal: false,
+        timestamp: new Date().toISOString(),
+        confidence: 0.7,
+      });
+
+      // Second sentence final arrives
+      vi.advanceTimersByTime(500);
+      (manager as any).handleConversationTranscript(session, {
+        text: 'Would you like a substitute?',
+        isFinal: true,
+        timestamp: new Date().toISOString(),
+        confidence: 0.95,
+      });
+
+      // Wait for full debounce from last final
+      vi.advanceTimersByTime(3500);
+      expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith(
+        'So we are actually out of mushrooms. Would you like a substitute?'
+      );
+      expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledTimes(1);
     });
   });
 });

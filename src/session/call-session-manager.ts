@@ -59,8 +59,13 @@ export class CallSessionManager {
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private _pendingTranscripts: string[] = [];
   private _isGenerating = false;
+  private _debounceStartedAt: number | null = null;
+  private _currentDebounceMs: number | null = null;
   private static readonly DEBOUNCE_MS = 3500;
-  private static readonly SPEECH_FINAL_DEBOUNCE_MS = 1500;
+  private static readonly SPEECH_FINAL_DEBOUNCE_MS = 2000;
+
+  // Filler/acknowledgment words that are almost always followed by more speech
+  private static readonly FILLER_PATTERN = /^(okay|ok|got it|cool|right|alright|sure|mm-?hmm|uh-?huh|yeah|yep|yup|great|perfect)\.?$/i;
 
   // Post-confirm auto-hangup
   private _confirmDoneTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -463,7 +468,26 @@ export class CallSessionManager {
       session.logger.info('session.confirm_timeout_cancelled', 'Confirm-done timeout cancelled — employee still speaking');
     }
 
-    if (!session.conversationEngine || !transcript.isFinal) return;
+    if (!session.conversationEngine) return;
+
+    // Partial transcripts: if a partial arrives while the debounce timer is running
+    // and we have pending transcripts, reset the timer — the employee is still talking
+    if (!transcript.isFinal) {
+      if (this._debounceTimer && this._pendingTranscripts.length > 0) {
+        clearTimeout(this._debounceTimer);
+        this._currentDebounceMs = CallSessionManager.DEBOUNCE_MS;
+        this._debounceTimer = setTimeout(() => {
+          this.flushDebouncedTranscripts(session);
+        }, CallSessionManager.DEBOUNCE_MS);
+
+        session.logger.info('session.debounce_extended_by_partial', 'Debounce timer reset by partial transcript — employee still speaking', {
+          partial_text: transcript.text,
+          pending_count: this._pendingTranscripts.length,
+          new_debounce_ms: CallSessionManager.DEBOUNCE_MS,
+        });
+      }
+      return;
+    }
 
     // Check for bot detection in transcript before other processing
     if (this.detectBotAccusation(transcript.text)) {
@@ -489,13 +513,31 @@ export class CallSessionManager {
     this._pendingTranscripts.push(transcript.text);
 
     // Reset debounce timer
+    const isFirstPending = this._pendingTranscripts.length === 1;
     if (this._debounceTimer) {
       clearTimeout(this._debounceTimer);
+      session.logger.info('session.debounce_timer_reset', 'Debounce timer reset by new final transcript', {
+        pending_count: this._pendingTranscripts.length,
+        new_debounce_ms: CallSessionManager.DEBOUNCE_MS,
+        elapsed_ms: this._debounceStartedAt ? Date.now() - this._debounceStartedAt : null,
+      });
     }
+
+    if (isFirstPending) {
+      this._debounceStartedAt = Date.now();
+    }
+    this._currentDebounceMs = CallSessionManager.DEBOUNCE_MS;
 
     this._debounceTimer = setTimeout(() => {
       this.flushDebouncedTranscripts(session);
     }, CallSessionManager.DEBOUNCE_MS);
+
+    session.logger.info('session.debounce_timer_started', 'Debounce timer started', {
+      debounce_ms: CallSessionManager.DEBOUNCE_MS,
+      pending_count: this._pendingTranscripts.length,
+      trigger: 'new_final_transcript',
+      text: transcript.text,
+    });
   }
 
   /** Handle speech_final as a confidence hint — shorten debounce instead of immediate flush */
@@ -503,14 +545,33 @@ export class CallSessionManager {
     if (session.phase !== 'conversation') return;
     if (this._pendingTranscripts.length === 0) return;
 
+    // Check if accumulated text is just a filler word — if so, keep the full debounce
+    const combinedText = this._pendingTranscripts.join(' ').trim();
+    const isFiller = CallSessionManager.FILLER_PATTERN.test(combinedText);
+
+    if (isFiller) {
+      session.logger.info('session.debounce_filler_detected', 'Filler word detected — keeping full debounce timer', {
+        text: combinedText,
+        debounce_ms: CallSessionManager.DEBOUNCE_MS,
+      });
+      return; // Don't shorten — filler words are almost always followed by more speech
+    }
+
     // Clear existing debounce and start a shorter one
     if (this._debounceTimer) {
       clearTimeout(this._debounceTimer);
     }
 
+    this._currentDebounceMs = CallSessionManager.SPEECH_FINAL_DEBOUNCE_MS;
     this._debounceTimer = setTimeout(() => {
       this.flushDebouncedTranscripts(session);
     }, CallSessionManager.SPEECH_FINAL_DEBOUNCE_MS);
+
+    session.logger.info('session.debounce_timer_shortened', 'Debounce timer shortened by speech_final', {
+      new_debounce_ms: CallSessionManager.SPEECH_FINAL_DEBOUNCE_MS,
+      text: combinedText,
+      is_filler: false,
+    });
   }
 
   // Bot accusation patterns — similar approach to hold-detector.ts
@@ -547,11 +608,17 @@ export class CallSessionManager {
     }
 
     const combinedText = this._pendingTranscripts.join(' ');
+    const totalWaitMs = this._debounceStartedAt ? Date.now() - this._debounceStartedAt : null;
     this._pendingTranscripts = [];
+    this._debounceStartedAt = null;
 
     session.logger.info('session.debounce_flushed', `Flushed ${combinedText.split(' ').length} words to Groq`, {
       text: combinedText,
+      debounce_type: this._currentDebounceMs === CallSessionManager.SPEECH_FINAL_DEBOUNCE_MS ? 'shortened' : 'full',
+      total_wait_ms: totalWaitMs,
+      debounce_ms: this._currentDebounceMs,
     });
+    this._currentDebounceMs = null;
 
     session.conversationEngine.addEmployeeSpeech(combinedText);
     this.generateAndSpeak(session);
