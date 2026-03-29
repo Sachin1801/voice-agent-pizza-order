@@ -321,6 +321,21 @@ export class DebugConversationEngine {
 
   // ─── Private helpers (mirrored from ConversationEngine) ───────────────────
 
+  /** Resolve side description from recent conversation history */
+  private resolveSideFromHistory(): string {
+    const allOptions = [this.order.side.first_choice, ...this.order.side.backup_options];
+    // Search recent history for mentions of side options
+    const recentText = this.conversationHistory.slice(-6).map((t) => t.text.toLowerCase()).join(' ');
+    for (const option of allOptions) {
+      // Check each word of the option (e.g., "garlic bread" → check "garlic" and "bread")
+      const words = option.toLowerCase().split(/\s+/);
+      if (words.some((w) => w.length > 3 && recentText.includes(w))) {
+        return option;
+      }
+    }
+    return this.order.side.first_choice;
+  }
+
   private getTextToSpeak(action: LLMAction): string {
     if ('text' in action) return action.text;
     return '';
@@ -370,16 +385,26 @@ export class DebugConversationEngine {
           } else if (itemLower === 'side' || itemLower.includes('wing') || itemLower.includes('bread') || itemLower.includes('stick')) {
             if (this.orderState.sidePrice === null) {
               this.orderState.sideConfirmed = true;
-              this.orderState.sideDescription = item;
+              // Resolve actual side name from recent conversation context
+              this.orderState.sideDescription = itemLower === 'side'
+                ? this.resolveSideFromHistory()
+                : item;
               this.orderState.sidePrice = price;
               this.orderState.runningTotal += price;
             }
           } else if (itemLower === 'drink' || itemLower.includes('coke') || itemLower.includes('pepsi') || itemLower.includes('sprite')) {
             if (this.orderState.drinkPrice === null) {
-              this.orderState.drinkConfirmed = true;
-              this.orderState.drinkDescription = item;
-              this.orderState.drinkPrice = price;
-              this.orderState.runningTotal += price;
+              // Check budget before accepting drink
+              if (this.ruleEngine.shouldSkipDrink(this.orderState, price)) {
+                this.orderState.drinkSkipped = true;
+              } else {
+                this.orderState.drinkConfirmed = true;
+                this.orderState.drinkDescription = itemLower === 'drink'
+                  ? this.order.drink.first_choice
+                  : item;
+                this.orderState.drinkPrice = price;
+                this.orderState.runningTotal += price;
+              }
             }
           }
         }

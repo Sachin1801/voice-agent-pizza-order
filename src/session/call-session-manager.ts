@@ -592,6 +592,24 @@ export class CallSessionManager {
     return CallSessionManager.BOT_ACCUSATION_PATTERNS.some((p) => p.test(text));
   }
 
+  /** Resolve a descriptive name for the side when LLM only sends category "side" */
+  private resolveSideDescription(session: CallSession): string {
+    // Check if a backup option was being discussed
+    const state = session.conversationEngine!.getOrderState();
+    const backups = session.order.side.backup_options;
+    if (state.sideAttemptIndex > 0 && state.sideAttemptIndex <= backups.length) {
+      return backups[state.sideAttemptIndex - 1];
+    }
+    // Fall back to first choice or first backup
+    if (state.sideAttemptIndex === 0) return session.order.side.first_choice;
+    return backups[0] ?? session.order.side.first_choice;
+  }
+
+  /** Resolve a descriptive name for the drink when LLM only sends category "drink" */
+  private resolveDrinkDescription(session: CallSession): string {
+    return session.order.drink.first_choice;
+  }
+
   /** Flush accumulated transcripts and trigger Groq (called by debounce timer or speech_final) */
   private flushDebouncedTranscripts(session: CallSession): void {
     if (this._debounceTimer) {
@@ -664,9 +682,18 @@ export class CallSessionManager {
           if (itemLower === 'pizza' || itemLower.includes('pizza')) {
             session.conversationEngine.updatePizzaPrice(price);
           } else if (itemLower === 'side' || itemLower.includes('bread') || itemLower.includes('wing') || itemLower.includes('stick') || itemLower.includes('side')) {
-            session.conversationEngine.updateSide(item, price);
+            // Use a descriptive name, not just the category "side".
+            // Try to resolve from the employee's recent speech or fall back to the order's side options.
+            const sideDescription = itemLower === 'side'
+              ? this.resolveSideDescription(session)
+              : item;
+            session.conversationEngine.updateSide(sideDescription, price);
           } else if (itemLower === 'drink' || itemLower.includes('coke') || itemLower.includes('pepsi') || itemLower.includes('sprite') || itemLower.includes('drink')) {
-            session.conversationEngine.updateDrink(item, price);
+            // Use a descriptive name, not just the category "drink".
+            const drinkDescription = itemLower === 'drink'
+              ? this.resolveDrinkDescription(session)
+              : item;
+            session.conversationEngine.updateDrink(drinkDescription, price);
           }
         }
         if (action.heard_total != null) {
