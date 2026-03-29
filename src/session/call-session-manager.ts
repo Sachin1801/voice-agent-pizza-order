@@ -61,8 +61,8 @@ export class CallSessionManager {
   private _isGenerating = false;
   private _debounceStartedAt: number | null = null;
   private _currentDebounceMs: number | null = null;
-  private static readonly DEBOUNCE_MS = 3500;
-  private static readonly SPEECH_FINAL_DEBOUNCE_MS = 2000;
+  private static readonly DEBOUNCE_MS = 2500;
+  private static readonly SPEECH_FINAL_DEBOUNCE_MS = 1200;
 
   // Filler/acknowledgment words that are almost always followed by more speech
   private static readonly FILLER_PATTERN = /^(okay|ok|got it|cool|right|alright|sure|mm-?hmm|uh-?huh|yeah|yep|yup|great|perfect)\.?$/i;

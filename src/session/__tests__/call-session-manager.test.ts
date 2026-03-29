@@ -187,7 +187,7 @@ describe('CallSessionManager', () => {
   // ─── Debounce Timing ───────────────────────────────────────────────────
 
   describe('debounce timing', () => {
-    it('uses 3500ms debounce (not 2000ms)', () => {
+    it('uses 2500ms full debounce', () => {
       const session = createFakeSession();
       const mockEngine = {
         addEmployeeSpeech: vi.fn(),
@@ -206,12 +206,12 @@ describe('CallSessionManager', () => {
         confidence: 0.95,
       });
 
-      // At 2000ms, should NOT have flushed yet
-      vi.advanceTimersByTime(2000);
+      // At 1200ms, should NOT have flushed yet
+      vi.advanceTimersByTime(1200);
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
 
-      // At 3500ms, should flush
-      vi.advanceTimersByTime(1500);
+      // At 2500ms, should flush
+      vi.advanceTimersByTime(1300);
       expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith('That will be eighteen fifty');
     });
 
@@ -267,7 +267,7 @@ describe('CallSessionManager', () => {
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
     });
 
-    it('speech_final reschedules to 2000ms instead of 3500ms', () => {
+    it('speech_final reschedules to 1200ms instead of 2500ms', () => {
       const session = createFakeSession();
       const mockEngine = {
         addEmployeeSpeech: vi.fn(),
@@ -289,12 +289,12 @@ describe('CallSessionManager', () => {
       // Fire speech_final immediately after
       (manager as any).handleSpeechFinal(session);
 
-      // At 1500ms — not yet (was flushing here before, now waits longer)
-      vi.advanceTimersByTime(1500);
+      // At 1000ms — not yet
+      vi.advanceTimersByTime(1000);
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
 
-      // At 2000ms — should flush
-      vi.advanceTimersByTime(500);
+      // At 1200ms — should flush
+      vi.advanceTimersByTime(200);
       expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith('Here is your order number 4412');
     });
 
@@ -427,7 +427,7 @@ describe('CallSessionManager', () => {
       });
 
       // Flush after debounce
-      vi.advanceTimersByTime(3500);
+      vi.advanceTimersByTime(2500);
 
       expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith(
         'Okay so that will be eighteen fifty for the pizza'
@@ -489,7 +489,7 @@ describe('CallSessionManager', () => {
       });
 
       // Let debounce fire
-      vi.advanceTimersByTime(3500);
+      vi.advanceTimersByTime(2500);
 
       // addEmployeeSpeech should NOT have been called because _isGenerating
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
@@ -580,12 +580,12 @@ describe('CallSessionManager', () => {
       // speech_final fires — but "Okay." is a filler, so it should NOT shorten
       (manager as any).handleSpeechFinal(session);
 
-      // At 2000ms (speech_final timer), should NOT have flushed
-      vi.advanceTimersByTime(2000);
+      // At 1200ms (speech_final timer), should NOT have flushed (filler keeps full debounce)
+      vi.advanceTimersByTime(1200);
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
 
-      // At 3500ms (full timer), standalone filler is DROPPED — not sent to Groq
-      vi.advanceTimersByTime(1500);
+      // At 2500ms (full timer), standalone filler is DROPPED — not sent to Groq
+      vi.advanceTimersByTime(1300);
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
     });
 
@@ -610,11 +610,11 @@ describe('CallSessionManager', () => {
       (manager as any).handleSpeechFinal(session);
 
       // Should NOT flush at shortened timer
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(1200);
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
 
       // Standalone filler is DROPPED at full timer — not sent to Groq
-      vi.advanceTimersByTime(1500);
+      vi.advanceTimersByTime(1300);
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
     });
 
@@ -638,8 +638,8 @@ describe('CallSessionManager', () => {
 
       (manager as any).handleSpeechFinal(session);
 
-      // Should flush at 2000ms (shortened)
-      vi.advanceTimersByTime(2000);
+      // Should flush at 1200ms (shortened)
+      vi.advanceTimersByTime(1200);
       expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith('The total is twenty nine dollars');
     });
 
@@ -757,7 +757,7 @@ describe('CallSessionManager', () => {
       });
 
       // Wait for full debounce from last final
-      vi.advanceTimersByTime(3500);
+      vi.advanceTimersByTime(2500);
       expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith(
         'So we are actually out of mushrooms. Would you like a substitute?'
       );
