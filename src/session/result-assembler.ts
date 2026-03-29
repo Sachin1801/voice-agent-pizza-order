@@ -46,10 +46,11 @@ export class ResultAssembler {
             description: orderState.drinkDescription ?? order.drink.first_choice,
             price: orderState.drinkPrice ?? 0,
           }
-        : orderState.drinkSkipped
-        ? null
         : null,
-      total: orderState.runningTotal || null,
+      drink_skip_reason: orderState.drinkSkipped
+        ? `Skipped — would exceed budget of $${order.budget_max}`
+        : null,
+      total: orderState.heardTotal ?? (orderState.runningTotal || null),
       delivery_time: orderState.deliveryTime,
       order_number: orderState.orderNumber,
       special_instructions_delivered: orderState.specialInstructionsDelivered,

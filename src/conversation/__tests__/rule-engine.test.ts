@@ -114,8 +114,24 @@ describe('RuleEngine', () => {
       expect(decision.reason).toContain('pizza not confirmed');
     });
 
+    it('blocks completion if side not confirmed or skipped', () => {
+      state.pizzaConfirmed = true;
+      const action: LLMAction = {
+        action: 'hangup_with_outcome',
+        outcome: 'completed',
+        reason: 'Order done',
+        text: 'Thanks!',
+      };
+      const decision = engine.evaluate(action, state);
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain('side not confirmed');
+    });
+
     it('blocks completion if special instructions not delivered', () => {
       state.pizzaConfirmed = true;
+      state.sideConfirmed = true;
+      state.deliveryTime = '35 minutes';
+      state.orderNumber = '1234';
       const action: LLMAction = {
         action: 'hangup_with_outcome',
         outcome: 'completed',
@@ -127,8 +143,56 @@ describe('RuleEngine', () => {
       expect(decision.reason).toContain('special instructions');
     });
 
-    it('allows completion when pizza confirmed and instructions delivered', () => {
+    it('blocks completion if delivery time not collected', () => {
       state.pizzaConfirmed = true;
+      state.sideConfirmed = true;
+      const action: LLMAction = {
+        action: 'hangup_with_outcome',
+        outcome: 'completed',
+        reason: 'Order done',
+        text: 'Thanks!',
+      };
+      const decision = engine.evaluate(action, state);
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain('delivery time');
+    });
+
+    it('blocks completion if order number not collected', () => {
+      state.pizzaConfirmed = true;
+      state.sideConfirmed = true;
+      state.deliveryTime = '35 minutes';
+      const action: LLMAction = {
+        action: 'hangup_with_outcome',
+        outcome: 'completed',
+        reason: 'Order done',
+        text: 'Thanks!',
+      };
+      const decision = engine.evaluate(action, state);
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain('order number');
+    });
+
+    it('allows completion when all preconditions met', () => {
+      state.pizzaConfirmed = true;
+      state.sideConfirmed = true;
+      state.deliveryTime = '35 minutes';
+      state.orderNumber = '4412';
+      state.specialInstructionsDelivered = true;
+      const action: LLMAction = {
+        action: 'hangup_with_outcome',
+        outcome: 'completed',
+        reason: 'All done',
+        text: 'Thank you!',
+      };
+      const decision = engine.evaluate(action, state);
+      expect(decision.allowed).toBe(true);
+    });
+
+    it('allows completion when side is skipped (not confirmed)', () => {
+      state.pizzaConfirmed = true;
+      state.sideSkipped = true;
+      state.deliveryTime = '35 minutes';
+      state.orderNumber = '4412';
       state.specialInstructionsDelivered = true;
       const action: LLMAction = {
         action: 'hangup_with_outcome',

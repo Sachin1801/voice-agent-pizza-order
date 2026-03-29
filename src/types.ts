@@ -67,6 +67,7 @@ export interface CallResult {
   pizza: PizzaResult | null;
   side: SideResult | null;
   drink: DrinkResult | null;
+  drink_skip_reason: string | null;
   total: number | null;
   delivery_time: string | null;
   order_number: string | null;

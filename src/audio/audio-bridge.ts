@@ -22,8 +22,26 @@ import { CartesiaClient, CartesiaAudioChunk } from './cartesia-client';
 
 export declare interface AudioBridge {
   on(event: 'transcript', listener: (data: TranscriptEvent) => void): this;
+  on(event: 'speech_final', listener: (data: TranscriptEvent) => void): this;
   on(event: 'speaking_started', listener: () => void): this;
   on(event: 'speaking_finished', listener: () => void): this;
+}
+
+/** Normalize text for natural TTS speech */
+function normalizeForSpeech(text: string): string {
+  return text
+    .replace(/\b(\d+)L\b/g, '$1 liter')
+    .replace(/\b(\d+)\s*oz\b/gi, '$1 ounce')
+    .replace(/\bApt\b/g, 'Apartment')
+    .replace(/\bSt\b(?=\s+\d)/g, 'Street')    // "St 100" → "Street 100"
+    .replace(/\bAve\b/g, 'Avenue')
+    .replace(/\bBlvd\b/g, 'Boulevard')
+    .replace(/(?<=\d\s)Dr\b/g, 'Drive')  // "100 Dr" → "100 Drive" (street context, requires preceding number)
+    .replace(/\bTX\b/g, 'Texas')
+    .replace(/\bCA\b/g, 'California')
+    .replace(/\bNY\b/g, 'New York')
+    .replace(/\bFL\b/g, 'Florida')
+    .replace(/\b(\d+)\s*ct\b/gi, '$1 count');
 }
 
 export class AudioBridge extends EventEmitter {
@@ -38,6 +56,7 @@ export class AudioBridge extends EventEmitter {
   private speakStartTime: number | null = null;
   private audioBuffer: Buffer[] = [];
   private deepgramReady = false;
+  private bargeinEnabled = false;
 
   constructor(parentLogger: Logger) {
     super();
@@ -50,6 +69,11 @@ export class AudioBridge extends EventEmitter {
       this.emit('transcript', data);
     });
 
+    // Wire speech_final (speaker finished their utterance) for debounce flush
+    this.deepgram.on('speech_final', (data) => {
+      this.emit('speech_final', data);
+    });
+
     // When Deepgram signals ready, flush any buffered audio
     this.deepgram.on('ready', () => {
       this.deepgramReady = true;
@@ -59,6 +83,17 @@ export class AudioBridge extends EventEmitter {
           this.deepgram.sendAudio(buf);
         }
         this.audioBuffer = [];
+      }
+    });
+
+    // Barge-in: when the remote speaker starts talking, stop our TTS playback
+    // Only active during conversation phase — during IVR/hold, the IVR audio
+    // or hold music would trigger false barge-ins and cut off agent speech
+    this.deepgram.on('speech_started', () => {
+      if (this.bargeinEnabled && this.isSpeaking) {
+        this.logger.info('audio_bridge.barge_in_vad', 'VAD speech_started while agent speaking — triggering barge-in');
+        this.clearPlayback();
+        this.cartesia.cancel();
       }
     });
 
@@ -160,11 +195,12 @@ export class AudioBridge extends EventEmitter {
 
   /** Speak text through Cartesia → Twilio */
   speak(text: string): void {
-    const startTime = Date.now();
-    this.logger.info('audio_bridge.speak_request', `Speaking: "${text.slice(0, 60)}${text.length > 60 ? '...' : ''}"`, {
-      text_length: text.length,
+    const normalized = normalizeForSpeech(text);
+    this.logger.info('audio_bridge.speak_request', `Speaking: "${normalized.slice(0, 60)}${normalized.length > 60 ? '...' : ''}"`, {
+      text_length: normalized.length,
+      normalized: text !== normalized,
     });
-    this.cartesia.speak(text);
+    this.cartesia.speak(normalized);
   }
 
   /** Send audio data back to Twilio */
@@ -182,6 +218,17 @@ export class AudioBridge extends EventEmitter {
     });
 
     this.twilioSocket.send(msg);
+  }
+
+  /** Enable or disable barge-in (should only be enabled during conversation phase) */
+  setBargeinEnabled(enabled: boolean): void {
+    this.bargeinEnabled = enabled;
+    this.logger.info('audio_bridge.bargein_toggle', `Barge-in ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  /** Register callback for when the remote speaker finishes their utterance */
+  onSpeechFinal(callback: () => void): void {
+    this.on('speech_final', callback);
   }
 
   /** Check if the agent is currently speaking */

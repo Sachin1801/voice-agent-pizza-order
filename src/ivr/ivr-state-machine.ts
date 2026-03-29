@@ -53,23 +53,19 @@ export class IVRStateMachine {
 
   /**
    * Process a transcript from STT.
-   * Accumulates partial transcripts and matches against expected prompts.
+   * Only acts on final transcripts — partials are ignored to prevent
+   * premature IVR actions from incomplete speech (e.g., triggering on
+   * "Thank you for calling" before "Press 1 for delivery" arrives).
    * Returns an action to take.
    */
   processTranscript(transcript: string, isFinal: boolean): IVRAction {
-    // Accumulate transcript
-    if (isFinal) {
-      this.transcriptBuffer += ' ' + transcript;
-    } else {
-      // For partials, try matching eagerly but don't commit
-      const combined = this.transcriptBuffer + ' ' + transcript;
-      const match = matchPrompt(this.state, combined);
-      if (match) {
-        this.transcriptBuffer = combined;
-        return this.handleMatch(match, combined);
-      }
+    // Ignore partial transcripts entirely — only finals are reliable enough for IVR actions
+    if (!isFinal) {
       return { type: 'wait' };
     }
+
+    // Accumulate final transcript
+    this.transcriptBuffer += ' ' + transcript;
 
     // Try to match the accumulated transcript
     const match = matchPrompt(this.state, this.transcriptBuffer);

@@ -144,4 +144,34 @@ describe('IVRStateMachine', () => {
     const action = machine.processTranscript('some random', false);
     expect(action.type).toBe('wait');
   });
+
+  describe('final-only processing', () => {
+    it('partial welcome transcript returns wait and does not change state', () => {
+      const action = machine.processTranscript('Thank you for calling', false);
+      expect(action).toEqual({ type: 'wait' });
+      expect(machine.getState()).toBe('WELCOME');
+    });
+
+    it('partial welcome followed by final full menu triggers DTMF only on the final', () => {
+      // Partial: should be ignored entirely
+      const partialAction = machine.processTranscript('Thank you for calling', false);
+      expect(partialAction).toEqual({ type: 'wait' });
+      expect(machine.getState()).toBe('WELCOME');
+
+      // Final with the full prompt: should trigger DTMF
+      const finalAction = machine.processTranscript(
+        'Thank you for calling. Press 1 for delivery. Press 2 for carryout.',
+        true
+      );
+      expect(finalAction).toEqual({ type: 'send_dtmf', digits: '1' });
+      expect(machine.getState()).toBe('NAME');
+    });
+
+    it('partial transcript with matching content does NOT trigger action', () => {
+      // Even if the partial contains "press 1 for delivery", it should be ignored
+      const action = machine.processTranscript('Press 1 for delivery', false);
+      expect(action).toEqual({ type: 'wait' });
+      expect(machine.getState()).toBe('WELCOME');
+    });
+  });
 });

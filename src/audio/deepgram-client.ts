@@ -28,6 +28,8 @@ export interface TranscriptEvent {
 
 export declare interface DeepgramSTTClient {
   on(event: 'transcript', listener: (data: TranscriptEvent) => void): this;
+  on(event: 'speech_final', listener: (data: TranscriptEvent) => void): this;
+  on(event: 'speech_started', listener: () => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
   on(event: 'close', listener: () => void): this;
   on(event: 'ready', listener: () => void): this;
@@ -90,6 +92,9 @@ export class DeepgramSTTClient extends EventEmitter {
       this.connection.on('message', (data: any) => {
         if (data.type === 'Results') {
           this.handleTranscriptResult(data);
+        } else if (data.type === 'SpeechStarted') {
+          this.logger.debug('deepgram.speech_started', 'VAD: speech started');
+          this.emit('speech_started');
         }
       });
 
@@ -168,6 +173,13 @@ export class DeepgramSTTClient extends EventEmitter {
     });
 
     this.emit('transcript', transcript);
+
+    // Emit speech_final when Deepgram signals the speaker has finished their utterance
+    // This is distinct from isFinal (end of a transcript segment) — speech_final means
+    // the speaker actually stopped talking (based on silence/endpointing)
+    if (data.speech_final === true && isFinal) {
+      this.emit('speech_final', transcript);
+    }
   }
 
   /** Send raw mulaw audio data to Deepgram */

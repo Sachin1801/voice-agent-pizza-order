@@ -20,5 +20,5 @@
     "skip_if_over_budget": true
   },
   "budget_max": 45.00,
-  "special_instructions": "Ring doorbell, don't knock (baby sleeping)"
+  "special_instructions": "Add a special request instruction for the delivery driver. Levae the food at the door"
 }
