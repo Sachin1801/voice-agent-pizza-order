@@ -197,7 +197,8 @@ Commands:
   start --order <file> [--port 4100]  Start debug server with an order file
   stop                                 Stop the debug server
   send "<text>"                        Send employee text, get pipeline diagnostic
-  ivr                                  Run IVR auto-play sequence
+  ivr                                  Run IVR auto-play sequence (happy path)
+  ivr test '<json>'                     Test custom transcripts through IVR state machine
   state                                Get current conversation and order state
   rewind <turns>                       Go back N turns in conversation
   rules list                           List active debug rules
@@ -231,7 +232,21 @@ Commands:
     }
 
     case 'ivr':
-      output(await request('POST', '/api/ivr'));
+      if (subcommand === 'test') {
+        const jsonArg = args.slice(2).join(' ');
+        if (!jsonArg) {
+          outputError('ivr.test', 'Usage: voice-debug ivr test \'[{"text":"Hi. Thank you for calling.","is_final":true}]\'');
+          return;
+        }
+        try {
+          const transcripts = JSON.parse(jsonArg);
+          output(await request('POST', '/api/ivr/test', { transcripts }));
+        } catch {
+          outputError('ivr.test', 'Invalid JSON. Provide an array of {text, is_final} objects.');
+        }
+      } else {
+        output(await request('POST', '/api/ivr'));
+      }
       break;
 
     case 'state':

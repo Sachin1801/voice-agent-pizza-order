@@ -97,7 +97,7 @@ export class IVRStateMachine {
 
   /** Handle a successful prompt match */
   private handleMatch(promptConfig: IVRPromptConfig, transcript: string): IVRAction {
-    const response = promptConfig.getResponse(this.order);
+    const response = promptConfig.getResponse(this.order, transcript.trim());
 
     this.logger.info('ivr.prompt_matched', `Matched ${this.state} prompt`, {
       state: this.state,

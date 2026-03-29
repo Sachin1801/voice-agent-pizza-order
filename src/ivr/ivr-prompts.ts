@@ -18,8 +18,8 @@ export interface IVRPromptConfig {
   promptPatterns: RegExp[];
   /** How to respond */
   responseType: IVRResponseType;
-  /** Function to derive the response value from order data */
-  getResponse: (order: OrderRequest) => string;
+  /** Function to derive the response value from order data (and optionally the matched transcript) */
+  getResponse: (order: OrderRequest, transcript?: string) => string;
   /** Next state after successful response */
   nextState: IVRState;
   /** Max retries before forced hangup */
@@ -46,11 +46,24 @@ export const IVR_PROMPTS: IVRPromptConfig[] = [
   {
     state: 'WELCOME',
     promptPatterns: [
-      /press\s*1\s*(for)?\s*delivery/i,
-      /thank\s*you\s*for\s*calling/i,
+      // Only match when we hear the actual delivery option with its key number.
+      // The key might be any digit (1, 2, 8, etc.) — we capture it dynamically.
+      // Do NOT match on "thank you for calling" alone — that's just the greeting.
+      /press\s*(\d)\s*(for)?\s*delivery/i,
+      /delivery.{0,20}press\s*(\d)/i,
+      /for\s*delivery\s*press\s*(\d)/i,
     ],
     responseType: 'dtmf',
-    getResponse: () => '1',
+    getResponse: (_order, transcript?: string) => {
+      // Extract the actual digit from the transcript
+      if (transcript) {
+        const match = transcript.match(/press\s*(\d)\s*(for)?\s*delivery/i)
+          ?? transcript.match(/delivery.{0,20}press\s*(\d)/i)
+          ?? transcript.match(/for\s*delivery\s*press\s*(\d)/i);
+        if (match?.[1]) return match[1];
+      }
+      return '1'; // fallback
+    },
     nextState: 'NAME',
     maxRetries: 3,
   },
@@ -94,7 +107,34 @@ export const IVR_PROMPTS: IVRPromptConfig[] = [
       /say\s*'?yes'?\s*to\s*confirm/i,
     ],
     responseType: 'speech',
-    getResponse: () => 'yes',
+    getResponse: (order, transcript?: string) => {
+      // Verify the IVR repeated the correct ZIP before confirming.
+      // The IVR says something like "I heard seven eight seven four five. Is that correct?"
+      // If the spoken digits don't match the expected ZIP, say "no" to reject.
+      if (transcript) {
+        const expectedZip = extractZipCode(order.delivery_address);
+        const digitWords: Record<string, string> = {
+          zero: '0', one: '1', two: '2', three: '3', four: '4',
+          five: '5', six: '6', seven: '7', eight: '8', nine: '9',
+        };
+        // Check spoken digit words (e.g., "seven eight seven four five")
+        const spokenDigits = transcript.match(/(?:seven|eight|nine|zero|one|two|three|four|five|six)/gi);
+        if (spokenDigits && spokenDigits.length >= 5) {
+          // Take the LAST 5 spoken digits (the ZIP, not phone number digits before it)
+          const lastFive = spokenDigits.slice(-5);
+          const spokenZip = lastFive.map((w) => digitWords[w.toLowerCase()] ?? '').join('');
+          if (spokenZip && spokenZip !== expectedZip) {
+            return 'no';
+          }
+        }
+        // Check for raw 5-digit ZIP near "zip" keyword
+        const zipContextMatch = transcript.match(/zip\s*(?:code)?\s*(\d{5})/i);
+        if (zipContextMatch && zipContextMatch[1] !== expectedZip) {
+          return 'no';
+        }
+      }
+      return 'yes';
+    },
     nextState: 'TRANSFER',
     maxRetries: 3,
   },
