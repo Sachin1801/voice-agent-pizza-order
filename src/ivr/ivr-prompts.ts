@@ -22,6 +22,11 @@ export interface IVRPromptConfig {
   getResponse: (order: OrderRequest, transcript?: string) => string;
   /** Next state after successful response */
   nextState: IVRState;
+  /** Optional: state to go to when getResponse returns a rejection (e.g., "no").
+   *  If set, the state machine checks the response and routes accordingly. */
+  nextStateOnReject?: IVRState;
+  /** What response value counts as a rejection (defaults to "no") */
+  rejectResponse?: string;
   /** Max retries before forced hangup */
   maxRetries: number;
 }
@@ -157,6 +162,8 @@ export const IVR_PROMPTS: IVRPromptConfig[] = [
       return 'yes';
     },
     nextState: 'TRANSFER',
+    nextStateOnReject: 'ZIP_CODE',
+    rejectResponse: 'no',
     maxRetries: 3,
   },
   {

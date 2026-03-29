@@ -110,14 +110,18 @@ export class IVRStateMachine {
     // Clear buffer for next prompt
     this.transcriptBuffer = '';
 
-    // Transition state
+    // Determine next state — check for rejection routing
     const fromState = this.state;
-    this.state = promptConfig.nextState;
+    const isRejection = promptConfig.nextStateOnReject
+      && response === (promptConfig.rejectResponse ?? 'no');
+    this.state = isRejection ? promptConfig.nextStateOnReject! : promptConfig.nextState;
     this.retryCount.delete(fromState);
 
-    this.logger.info('ivr.state_transition', `${fromState} → ${this.state}`, {
+    this.logger.info('ivr.prompt_matched_transition', `${fromState} → ${this.state}${isRejection ? ' (rejected — restarting)' : ''}`, {
       from: fromState,
       to: this.state,
+      rejected: isRejection ?? false,
+      response,
     });
 
     // Return appropriate action
