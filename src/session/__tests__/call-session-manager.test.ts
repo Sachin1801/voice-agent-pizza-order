@@ -584,12 +584,12 @@ describe('CallSessionManager', () => {
       vi.advanceTimersByTime(2000);
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
 
-      // At 3500ms (full timer), should flush
+      // At 3500ms (full timer), standalone filler is DROPPED — not sent to Groq
       vi.advanceTimersByTime(1500);
-      expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith('Okay.');
+      expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
     });
 
-    it('filler word "Got it" keeps full debounce', () => {
+    it('filler word "Got it" keeps full debounce and is dropped', () => {
       const session = createFakeSession();
       const mockEngine = {
         addEmployeeSpeech: vi.fn(),
@@ -613,9 +613,9 @@ describe('CallSessionManager', () => {
       vi.advanceTimersByTime(2000);
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
 
-      // Should flush at full timer
+      // Standalone filler is DROPPED at full timer — not sent to Groq
       vi.advanceTimersByTime(1500);
-      expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith('Got it');
+      expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
     });
 
     it('non-filler text gets shortened debounce on speech_final', () => {
@@ -675,7 +675,7 @@ describe('CallSessionManager', () => {
       session.audioBridge = { getIsSpeaking: () => false } as any;
       (manager as any).activeSession = session;
 
-      // Employee says "Okay." (final)
+      // Employee says "Okay." (final) — filler, would be dropped if standalone
       (manager as any).handleConversationTranscript(session, {
         text: 'Okay.',
         isFinal: true,
@@ -696,9 +696,9 @@ describe('CallSessionManager', () => {
       vi.advanceTimersByTime(3000);
       expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
 
-      // At 3500ms from the partial, should flush
+      // "Okay." alone is a filler — it gets dropped at flush time
       vi.advanceTimersByTime(500);
-      expect(mockEngine.addEmployeeSpeech).toHaveBeenCalledWith('Okay.');
+      expect(mockEngine.addEmployeeSpeech).not.toHaveBeenCalled();
     });
 
     it('partial transcript without active debounce does nothing', () => {

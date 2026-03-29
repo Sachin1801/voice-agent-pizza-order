@@ -607,10 +607,22 @@ export class CallSessionManager {
       return;
     }
 
-    const combinedText = this._pendingTranscripts.join(' ');
+    const combinedText = this._pendingTranscripts.join(' ').trim();
     const totalWaitMs = this._debounceStartedAt ? Date.now() - this._debounceStartedAt : null;
     this._pendingTranscripts = [];
     this._debounceStartedAt = null;
+
+    // Drop standalone fillers — they are not meaningful turns.
+    // "Okay.", "Got it.", "Sure." alone should NOT trigger a Groq response.
+    const isFiller = CallSessionManager.FILLER_PATTERN.test(combinedText);
+    if (isFiller) {
+      session.logger.info('session.debounce_filler_dropped', `Dropping standalone filler: "${combinedText}" — not sending to Groq`, {
+        text: combinedText,
+        total_wait_ms: totalWaitMs,
+      });
+      this._currentDebounceMs = null;
+      return;
+    }
 
     session.logger.info('session.debounce_flushed', `Flushed ${combinedText.split(' ').length} words to Groq`, {
       text: combinedText,

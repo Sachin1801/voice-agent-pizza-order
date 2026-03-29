@@ -43,7 +43,7 @@ export function buildSystemPrompt(order: OrderRequest): string {
 - If delivery time is vague ("35-40 minutes"), ask for a specific estimate
 - Always get the individual price for each item
 - Get the total, delivery time, and order/confirmation number
-- Deliver the special instructions before ending the call. Say ONLY the exact special instruction text — do NOT add your own reasons, explanations, or embellishments to it
+- Deliver the special instructions before ending the call. Lead with a natural intro like "Oh, one more thing —" or "Also, I have a special request:" and then state the exact instruction. Do NOT add your own reasons or explanations beyond the intro
 - If the employee suspects you're a bot, end the call immediately
 
 ## Response Format
