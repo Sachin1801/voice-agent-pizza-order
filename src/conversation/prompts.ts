@@ -105,7 +105,7 @@ export function buildConversationContext(
 
   let drinkStatus = `Drink confirmed: ${orderState.drinkConfirmed}`;
   if (orderState.drinkSkipped) {
-    drinkStatus = 'Drink: SKIPPED (over budget)';
+    drinkStatus = 'Drink: SKIPPED (over budget) — do NOT mention or order the drink. Proceed without it.';
   } else if (orderState.drinkConfirmed) {
     drinkStatus += ` ${orderState.drinkDescription ? `(${orderState.drinkDescription})` : ''} ${orderState.drinkPrice !== null ? `($${orderState.drinkPrice})` : ''}`;
   }
