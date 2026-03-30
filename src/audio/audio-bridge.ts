@@ -43,7 +43,9 @@ function normalizeForSpeech(text: string): string {
     .replace(/\bCA\b/g, 'California')
     .replace(/\bNY\b/g, 'New York')
     .replace(/\bFL\b/g, 'Florida')
-    .replace(/\b(\d+)\s*ct\b/gi, '$1 count');
+    .replace(/\b(\d+)\s*ct\b/gi, '$1 count')
+    // Add natural pauses before farewell words so TTS doesn't rush "thank you goodbye"
+    .replace(/\b(thank you)\s*,?\s*(goodbye|bye|have a good|take care)/gi, '$1. ... $2');
 }
 
 export class AudioBridge extends EventEmitter {

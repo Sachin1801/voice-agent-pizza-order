@@ -18,7 +18,8 @@ function normalizeForSpeech(text: string): string {
     .replace(/\bCA\b/g, 'California')
     .replace(/\bNY\b/g, 'New York')
     .replace(/\bFL\b/g, 'Florida')
-    .replace(/\b(\d+)\s*ct\b/gi, '$1 count');
+    .replace(/\b(\d+)\s*ct\b/gi, '$1 count')
+    .replace(/\b(thank you)\s*,?\s*(goodbye|bye|have a good|take care)/gi, '$1. ... $2');
 }
 
 describe('normalizeForSpeech', () => {
@@ -73,6 +74,17 @@ describe('normalizeForSpeech', () => {
   it('does not format non-10-digit number sequences', () => {
     expect(normalizeForSpeech('78745')).toBe('78745');
     expect(normalizeForSpeech('4412')).toBe('4412');
+  });
+
+  it('adds pause before farewell words', () => {
+    expect(normalizeForSpeech('Thank you, goodbye.')).toBe('Thank you. ... goodbye.');
+    expect(normalizeForSpeech('Thank you goodbye')).toBe('Thank you. ... goodbye');
+    expect(normalizeForSpeech('Thank you, bye.')).toBe('Thank you. ... bye.');
+    expect(normalizeForSpeech('Thank you, have a good one')).toBe('Thank you. ... have a good one');
+  });
+
+  it('does not add pause when thank you is not followed by farewell', () => {
+    expect(normalizeForSpeech('Thank you for the order')).toBe('Thank you for the order');
   });
 
   it('leaves normal text unchanged', () => {
