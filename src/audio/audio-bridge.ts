@@ -30,6 +30,8 @@ export declare interface AudioBridge {
 /** Normalize text for natural TTS speech */
 function normalizeForSpeech(text: string): string {
   return text
+    // Format 10-digit phone numbers with dashes for natural TTS pauses
+    .replace(/\b(\d{3})(\d{3})(\d{4})\b/g, '$1-$2-$3')
     .replace(/\b(\d+)L\b/g, '$1 liter')
     .replace(/\b(\d+)\s*oz\b/gi, '$1 ounce')
     .replace(/\bApt\b/g, 'Apartment')
@@ -57,6 +59,8 @@ export class AudioBridge extends EventEmitter {
   private audioBuffer: Buffer[] = [];
   private deepgramReady = false;
   private bargeinEnabled = false;
+  private vadSuppressedUntil = 0;
+  private static readonly VAD_SUPPRESSION_MS = 500;
 
   constructor(parentLogger: Logger) {
     super();
@@ -91,6 +95,12 @@ export class AudioBridge extends EventEmitter {
     // or hold music would trigger false barge-ins and cut off agent speech
     this.deepgram.on('speech_started', () => {
       if (this.bargeinEnabled && this.isSpeaking) {
+        // Suppress VAD for a brief window after agent starts speaking
+        // to avoid false barge-ins from echo or background noise
+        if (Date.now() < this.vadSuppressedUntil) {
+          this.logger.debug('audio_bridge.barge_in_suppressed', 'VAD speech_started suppressed — within suppression window');
+          return;
+        }
         this.logger.info('audio_bridge.barge_in_vad', 'VAD speech_started while agent speaking — triggering barge-in');
         this.clearPlayback();
         this.cartesia.cancel();
@@ -119,6 +129,7 @@ export class AudioBridge extends EventEmitter {
       if (!this.isSpeaking) {
         this.isSpeaking = true;
         this.speakStartTime = Date.now();
+        this.vadSuppressedUntil = Date.now() + AudioBridge.VAD_SUPPRESSION_MS;
         this.logger.info('audio_bridge.playback_started', 'Agent started speaking');
         this.emit('speaking_started');
       }

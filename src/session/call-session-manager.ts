@@ -67,6 +67,21 @@ export class CallSessionManager {
   // Filler/acknowledgment words that are almost always followed by more speech
   private static readonly FILLER_PATTERN = /^(okay|ok|got it|cool|right|alright|sure|mm-?hmm|uh-?huh|yeah|yep|yup|great|perfect)\.?$/i;
 
+  // Fast-reply: predictable Q&A patterns for the first few turns
+  private _groqRequestCount = 0;
+  private static readonly FAST_REPLY_MAX_REQUESTS = 5;
+  private static readonly FAST_REPLY_PATTERNS: Array<{
+    pattern: RegExp;
+    field: 'customer_name' | 'phone_number' | 'delivery_address';
+  }> = [
+    { pattern: /\b(name for the order|name on the order|what.?s.*name|your name)\b/i, field: 'customer_name' },
+    { pattern: /\b(phone number|callback number|number to reach|what.?s.*number)\b/i, field: 'phone_number' },
+    { pattern: /\b(delivery address|address|where.*deliver)\b/i, field: 'delivery_address' },
+  ];
+
+  // Incomplete price sentence pattern — don't shorten debounce when price is being spoken
+  private static readonly INCOMPLETE_PRICE_PATTERN = /(?:\b(?:is|are|that's|that'll be|total is|comes to|be|your total)\s*$|\b(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|hundred)\s*$|\$\s*$)/i;
+
   // Post-confirm auto-hangup
   private _confirmDoneTimeout: ReturnType<typeof setTimeout> | null = null;
   private static readonly CONFIRM_DONE_TIMEOUT_MS = 10_000;
@@ -557,6 +572,16 @@ export class CallSessionManager {
       return; // Don't shorten — filler words are almost always followed by more speech
     }
 
+    // Check if the accumulated text looks like an incomplete price sentence
+    // e.g., "Your total is" or "twenty nine" — the rest of the number may still come
+    if (CallSessionManager.INCOMPLETE_PRICE_PATTERN.test(combinedText)) {
+      session.logger.info('session.debounce_incomplete_price', 'Incomplete price/sentence detected — keeping full debounce timer', {
+        text: combinedText,
+        debounce_ms: CallSessionManager.DEBOUNCE_MS,
+      });
+      return; // Don't shorten — more speech likely incoming with the price
+    }
+
     // Clear existing debounce and start a shorter one
     if (this._debounceTimer) {
       clearTimeout(this._debounceTimer);
@@ -590,6 +615,44 @@ export class CallSessionManager {
   /** Detect if the employee is accusing the agent of being a bot */
   private detectBotAccusation(text: string): boolean {
     return CallSessionManager.BOT_ACCUSATION_PATTERNS.some((p) => p.test(text));
+  }
+
+  /** Try to fast-reply to predictable Q&A questions (name, phone, address) */
+  private tryFastReply(session: CallSession, text: string): boolean {
+    if (!session.conversationEngine || !session.audioBridge) return false;
+    if (this._groqRequestCount >= CallSessionManager.FAST_REPLY_MAX_REQUESTS) return false;
+
+    for (const { pattern, field } of CallSessionManager.FAST_REPLY_PATTERNS) {
+      if (pattern.test(text)) {
+        let reply: string;
+        switch (field) {
+          case 'customer_name':
+            reply = session.order.customer_name;
+            break;
+          case 'phone_number':
+            reply = session.order.phone_number;
+            break;
+          case 'delivery_address':
+            reply = session.order.delivery_address;
+            break;
+        }
+
+        session.logger.info('session.fast_reply', `Fast-reply: "${field}" → "${reply}"`, {
+          field,
+          reply,
+          pattern: pattern.source,
+          groq_requests_so_far: this._groqRequestCount,
+        });
+
+        // Update conversation history (both sides) without calling Groq
+        session.conversationEngine.addEmployeeSpeech(text);
+        session.conversationEngine.addAgentSpeech(reply);
+        session.audioBridge.speak(reply);
+        this._groqRequestCount++;
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Resolve a descriptive name for the side when LLM only sends category "side" */
@@ -642,6 +705,12 @@ export class CallSessionManager {
       return;
     }
 
+    // Try fast-reply for predictable Q&A (name, phone, address) — skip Groq entirely
+    if (this.tryFastReply(session, combinedText)) {
+      this._currentDebounceMs = null;
+      return;
+    }
+
     session.logger.info('session.debounce_flushed', `Flushed ${combinedText.split(' ').length} words to Groq`, {
       text: combinedText,
       debounce_type: this._currentDebounceMs === CallSessionManager.SPEECH_FINAL_DEBOUNCE_MS ? 'shortened' : 'full',
@@ -651,6 +720,7 @@ export class CallSessionManager {
     this._currentDebounceMs = null;
 
     session.conversationEngine.addEmployeeSpeech(combinedText);
+    this._groqRequestCount++;
     this.generateAndSpeak(session);
   }
 

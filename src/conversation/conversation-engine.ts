@@ -72,6 +72,15 @@ export class ConversationEngine {
     });
   }
 
+  /** Add an agent response to conversation history (used by fast-reply to bypass Groq) */
+  addAgentSpeech(text: string): void {
+    this.conversationHistory.push({ role: 'agent', text });
+    this.logger.debug('conversation.agent_speech', `Agent (fast-reply): "${text}"`, {
+      text,
+      history_length: this.conversationHistory.length,
+    });
+  }
+
   /** Process the latest employee speech and generate a response */
   async generateResponse(): Promise<ConversationResult | null> {
     this.requestCount++;

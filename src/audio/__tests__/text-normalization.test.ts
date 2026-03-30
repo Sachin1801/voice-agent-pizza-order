@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 
 function normalizeForSpeech(text: string): string {
   return text
+    .replace(/\b(\d{3})(\d{3})(\d{4})\b/g, '$1-$2-$3')
     .replace(/\b(\d+)L\b/g, '$1 liter')
     .replace(/\b(\d+)\s*oz\b/gi, '$1 ounce')
     .replace(/\bApt\b/g, 'Apartment')
@@ -62,6 +63,16 @@ describe('normalizeForSpeech', () => {
   it('handles full address normalization', () => {
     expect(normalizeForSpeech('4821 Elm St 100, Apt 3B, Austin, TX 78745'))
       .toBe('4821 Elm Street 100, Apartment 3B, Austin, Texas 78745');
+  });
+
+  it('formats 10-digit phone numbers with dashes', () => {
+    expect(normalizeForSpeech('5125550147')).toBe('512-555-0147');
+    expect(normalizeForSpeech('The phone number is 5125550147')).toBe('The phone number is 512-555-0147');
+  });
+
+  it('does not format non-10-digit number sequences', () => {
+    expect(normalizeForSpeech('78745')).toBe('78745');
+    expect(normalizeForSpeech('4412')).toBe('4412');
   });
 
   it('leaves normal text unchanged', () => {
